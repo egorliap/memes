@@ -1,2 +1,5 @@
 **/venv/
 **/pgdata/
+**/__pycache__/
+Dockerfile.api
+Dockerfile.media_service

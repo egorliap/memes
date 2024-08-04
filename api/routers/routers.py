@@ -1,14 +1,13 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException,Response, UploadFile
+from fastapi import APIRouter, Depends, Response, UploadFile
 import json
 from fastapi.responses import FileResponse, StreamingResponse
 
 from api.schemas import MemeCreate, MemeCreateOrm, MemeDB
 from api.db import MemeOrm
-from media_service import s3_client
-
+from .logic import *
 
 IMAGE_EXTENSIONS = {"jpg","png"}
 
@@ -22,7 +21,7 @@ router = APIRouter(
 async def get_meme(id: int):
     meme = await MemeOrm.get_meme_by_id(id)
     if(meme):
-        meme.url = await s3_client.get_file_url(meme.name)
+        meme.url = await get_media(meme.name)
         return Response(status_code=200,
                         content=json.dumps({"success":"true",
                                  "message":f"Meme with id of {id} is found",
@@ -40,7 +39,7 @@ async def get_memes(size: int=20,page: int=1):
     memes = await MemeOrm.get_memes(limit=size,offset=page)
     content = []
     for meme in memes:
-        meme.url = await s3_client.get_file_url(meme.name)
+        meme.url = await get_media(meme.name)
         content.append(meme.model_dump())
     return Response(status_code=200,
                     content=json.dumps({"success":"true",
@@ -63,9 +62,17 @@ async def add_meme(meme: Annotated[MemeCreate,Depends()]):
                         media_type="application/json")
     
     filename = str(uuid.uuid4()) + "." + ext
+    meme.file.filename = filename
+    added = await add_media(meme.file)
     
-    
-    await s3_client.upload_file(filename,meme.file.file,meme.file.size)
+    if(not added):
+        return Response(status_code=500,
+                        content=json.dumps(
+                            {"success":"false",
+                             "message":"Problem with S3 storage"}
+                            ),
+                        media_type="application/json")
+        
     new_meme_id = await MemeOrm.add_meme(MemeCreateOrm(name=filename,description=meme.description))
         
     return Response(status_code=200,
@@ -80,9 +87,14 @@ async def add_meme(meme: Annotated[MemeCreate,Depends()]):
 @router.put("/{id}")
 async def update_meme(id: int, meme: Annotated[MemeCreate,Depends()]):
     meme_update = await MemeOrm.get_meme_by_id(id)
-    s3_client.delete_file(meme_update.name)
-    
-    # to outer handler 
+    deleted = await delete_media(meme_update.name)
+    if(not deleted):
+        return Response(status_code=500,
+                        content=json.dumps(
+                            {"success":"false",
+                             "message":"Problem with S3 storage"}
+                            ),
+                        media_type="application/json")
     ext = meme.file.filename.split(".")[-1]
     if(ext not in IMAGE_EXTENSIONS):
         return Response(status_code=400,
@@ -93,12 +105,22 @@ async def update_meme(id: int, meme: Annotated[MemeCreate,Depends()]):
                         media_type="application/json")
     
     filename = str(uuid.uuid4()) + "." + ext
+    meme.file.filename = filename
+    
     updated = MemeCreateOrm(description=meme.description,name=filename)
     
     await MemeOrm.update_meme(id,updated)
     
-    await s3_client.upload_file(filename,meme.file.file,meme.file.size)
+    added = await add_media(meme.file)
     
+    if(not added):
+        return Response(status_code=500,
+                        content=json.dumps(
+                            {"success":"false",
+                             "message":"Problem with S3 storage"}
+                            ),
+                        media_type="application/json")
+           
     return Response(status_code=200,
                     content=json.dumps(
                             {"success":"true",
@@ -110,8 +132,10 @@ async def update_meme(id: int, meme: Annotated[MemeCreate,Depends()]):
 @router.delete("/{id}")
 async def delete_meme(id: int):
     meme_delete = await MemeOrm.get_meme_by_id(id)
+    
     if(meme_delete):
-        await s3_client.delete_file(meme_delete.name)
+        deleted = await delete_media(meme_delete.name)
+        
         await MemeOrm.delete_meme(meme_delete.id)
         return Response(status_code=200,
                         content=json.dumps({"success":"true",

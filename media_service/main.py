@@ -1,60 +1,35 @@
-import os
-import asyncio
 from typing import BinaryIO
+from fastapi import FastAPI, File, Response, UploadFile
 
-from dotenv import load_dotenv
-from miniopy_async import Minio
+from .client import s3_client
 
-load_dotenv()
-
-
-class MinioClient:
-    def __init__(
-            self,
-            access_key: str,
-            secret_key: str,
-            endpoint_url: str,
-            bucket_name: str,
-    ):
-        self.client = Minio(
-            access_key=access_key,
-            secret_key=secret_key,
-            endpoint=endpoint_url,
-            secure=False
-        )
-        self.bucket_name = bucket_name
+app = FastAPI()
 
 
-    async def init_bucket(self):
-        if(not await self.client.bucket_exists(self.bucket_name)):
-            await self.client.make_bucket(self.bucket_name)
+@app.post("/")
+async def add_media(file: UploadFile):
+    try:
+        await s3_client.upload_file(file.filename,file.file,file.size)
+        return Response(status_code=200)
+    except:
+        Response(status_code=400)
         
         
-    async def upload_file(self, object_name: str, file: BinaryIO, file_size: int):
-        await self.client.put_object(self.bucket_name,
-                               object_name=object_name,
-                               data=file,
-                               length=file_size,
-                                )
+@app.get("/{filename}")
+async def get_media(filename: str):
+    try:
+        res = await s3_client.get_file_url(filename)
+        return Response(status_code=200,
+                        content=res,
+                        media_type="text/plain;charset=UTF-8")
+    except:
+        Response(status_code=400)
         
-        
-    async def get_file_url(self, object_name: str):
-        return await self.client.get_presigned_url(method="GET",
-                                      bucket_name=self.bucket_name,
-                                      object_name=object_name)
-        
-        
-    async def delete_file(self, object_name: str):
-        await self.client.remove_object(bucket_name=self.bucket_name,
-                                  object_name=object_name)
 
-
-s3_client = MinioClient(
-        access_key=os.getenv("MINIO_ROOT_USER"),
-        secret_key=os.getenv("MINIO_ROOT_PASSWORD"),
-        endpoint_url=os.getenv("MINIO_ENDPOINT_HOST")+":"+os.getenv("MINIO_ENDPOINT_PORT"),
-        bucket_name="bucket",
-    )
-
-
-
+@app.delete("/{filename}")
+async def delete_media(filename: str):
+    try:
+        await s3_client.delete_file(filename)
+        return Response(status_code=200)
+    except:
+        Response(status_code=400)
